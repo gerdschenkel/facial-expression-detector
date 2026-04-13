@@ -89,9 +89,9 @@
       margin-bottom: 8px;
       font-weight: 600;
     }
-    #timeline-canvas {
+    .timeline-canvas {
       width: 300px;
-      height: 360px;
+      height: 170px;
       background: #1a1a1a;
       border-radius: 10px;
       border: 1px solid #2a2a2a;
@@ -100,11 +100,13 @@
     #expression-display {
       text-align: center;
       margin-bottom: 20px;
+      height: 130px;
     }
     #emoji {
       font-size: 4rem;
       line-height: 1.2;
       transition: all 0.3s ease;
+      height: 52px;
     }
     #expression-label {
       font-size: 1.5rem;
@@ -112,10 +114,12 @@
       margin-top: 6px;
       text-transform: uppercase;
       letter-spacing: 2px;
+      height: 32px;
     }
     #confidence {
       font-size: 0.9rem;
       color: #888;
+      height: 20px;
       margin-top: 4px;
     }
     #bars {
@@ -237,7 +241,9 @@
       </div>
       <div class="timeline-column">
         <div class="timeline-header">Expression Timeline</div>
-        <canvas id="timeline-canvas"></canvas>
+        <canvas id="timeline-canvas" class="timeline-canvas"></canvas>
+        <div class="timeline-header" style="margin-top:12px;">Vitals Timeline</div>
+        <canvas id="vitals-timeline-canvas" class="timeline-canvas"></canvas>
       </div>
     </div>
   </div>
@@ -300,9 +306,27 @@
       expressionHistory[expr] = [];
     }
 
+    // --- Vitals timeline ---
+    const VITALS_COLORS = { hr: '#ff4c6a', br: '#4cc9f0', blink: '#a78bfa' };
+    const VITALS_LABELS = { hr: 'HR', br: 'Breath', blink: 'Blink' };
+    const VITALS_RANGES = { hr: [40, 160], br: [4, 40], blink: [0, 40] };
+    const vitalsHistory = { hr: [], br: [], blink: [] };
+
+    const EMA_ALPHA = 0.15; // lower = smoother, higher = more responsive
+    const emaState = {};
+    for (const expr of Object.keys(EMOJI_MAP)) {
+      emaState[expr] = null;
+    }
+
     function recordExpressionHistory(expressions) {
       for (const expr of Object.keys(EMOJI_MAP)) {
-        expressionHistory[expr].push(expressions[expr] || 0);
+        const raw = expressions[expr] || 0;
+        if (emaState[expr] === null) {
+          emaState[expr] = raw;
+        } else {
+          emaState[expr] = EMA_ALPHA * raw + (1 - EMA_ALPHA) * emaState[expr];
+        }
+        expressionHistory[expr].push(emaState[expr]);
         if (expressionHistory[expr].length > TIMELINE_MAX) {
           expressionHistory[expr].shift();
         }
@@ -347,8 +371,9 @@
       const len = expressionHistory.neutral.length;
       if (len < 2) return;
 
-      // Draw each expression line
+      // Draw each expression line (skip neutral)
       for (const expr of Object.keys(EMOJI_MAP)) {
+        if (expr === 'neutral') continue;
         const data = expressionHistory[expr];
         tCtx.strokeStyle = COLORS[expr];
         tCtx.lineWidth = 1.5 * dpr;
@@ -366,7 +391,7 @@
 
       // Legend at bottom
       const legendY = h - 10 * dpr;
-      const exprs = Object.keys(EMOJI_MAP);
+      const exprs = Object.keys(EMOJI_MAP).filter(e => e !== 'neutral');
       const legendW = plotW / exprs.length;
       tCtx.font = `${9 * dpr}px -apple-system, sans-serif`;
       tCtx.textAlign = 'center';
@@ -375,6 +400,67 @@
         tCtx.fillStyle = COLORS[exprs[i]];
         tCtx.fillRect(x - 12 * dpr, legendY - 5 * dpr, 8 * dpr, 3 * dpr);
         tCtx.fillText(exprs[i].slice(0, 4), x + 4 * dpr, legendY);
+      }
+    }
+
+    function drawVitalsTimeline() {
+      const c = document.getElementById('vitals-timeline-canvas');
+      const dpr = window.devicePixelRatio || 1;
+      const w = c.offsetWidth * dpr;
+      const h = c.offsetHeight * dpr;
+      c.width = w;
+      c.height = h;
+      const vCtx = c.getContext('2d');
+      vCtx.clearRect(0, 0, w, h);
+
+      const pad = { top: 10 * dpr, right: 14 * dpr, bottom: 30 * dpr, left: 14 * dpr };
+      const plotW = w - pad.left - pad.right;
+      const plotH = h - pad.top - pad.bottom;
+
+      // Grid lines
+      vCtx.strokeStyle = '#2a2a2a';
+      vCtx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.top + (plotH / 4) * i;
+        vCtx.beginPath();
+        vCtx.moveTo(pad.left, y);
+        vCtx.lineTo(pad.left + plotW, y);
+        vCtx.stroke();
+      }
+
+      const len = vitalsHistory.hr.length;
+      if (len < 2) return;
+
+      // Draw each vital as a normalized line
+      for (const key of Object.keys(VITALS_COLORS)) {
+        const data = vitalsHistory[key];
+        const [minR, maxR] = VITALS_RANGES[key];
+        vCtx.strokeStyle = VITALS_COLORS[key];
+        vCtx.lineWidth = 1.5 * dpr;
+        vCtx.globalAlpha = 0.85;
+        vCtx.beginPath();
+        for (let i = 0; i < data.length; i++) {
+          const x = pad.left + (i / (TIMELINE_MAX - 1)) * plotW;
+          const norm = Math.max(0, Math.min(1, (data[i] - minR) / (maxR - minR)));
+          const y = pad.top + plotH - norm * plotH;
+          if (i === 0) vCtx.moveTo(x, y);
+          else vCtx.lineTo(x, y);
+        }
+        vCtx.stroke();
+      }
+      vCtx.globalAlpha = 1;
+
+      // Legend
+      const legendY = h - 10 * dpr;
+      const keys = Object.keys(VITALS_COLORS);
+      const legendW = plotW / keys.length;
+      vCtx.font = `${9 * dpr}px -apple-system, sans-serif`;
+      vCtx.textAlign = 'center';
+      for (let i = 0; i < keys.length; i++) {
+        const x = pad.left + legendW * i + legendW / 2;
+        vCtx.fillStyle = VITALS_COLORS[keys[i]];
+        vCtx.fillRect(x - 12 * dpr, legendY - 5 * dpr, 8 * dpr, 3 * dpr);
+        vCtx.fillText(VITALS_LABELS[keys[i]], x + 8 * dpr, legendY);
       }
     }
 
@@ -538,6 +624,15 @@
       drawSignalCanvas('hr-canvas', rppgSignal, '#ff4c6a');
       drawSignalCanvas('br-canvas', breathSignal, '#4cc9f0');
       drawSignalCanvas('blink-canvas', earSignal, '#a78bfa');
+
+      // Record vitals history for timeline
+      vitalsHistory.hr.push(currentHR || 0);
+      vitalsHistory.br.push(currentBR || 0);
+      vitalsHistory.blink.push(currentBlinkRate || 0);
+      for (const k of Object.keys(vitalsHistory)) {
+        if (vitalsHistory[k].length > TIMELINE_MAX) vitalsHistory[k].shift();
+      }
+      drawVitalsTimeline();
     }
 
     function drawSignalCanvas(canvasId, signal, color) {
