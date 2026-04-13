@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Facial Expression Detector</title>
+  <title>Facial Expression & Vitals Detector</title>
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -16,6 +16,7 @@
       align-items: center;
       min-height: 100vh;
       padding: 20px;
+      overflow-x: hidden;
     }
     h1 {
       font-size: 1.6rem;
@@ -32,48 +33,99 @@
       border-radius: 12px;
       overflow: hidden;
       box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      width: 480px;
+      height: 360px;
     }
-    video, canvas {
+    video {
       display: block;
       border-radius: 12px;
+      width: 480px;
+      height: 360px;
+      object-fit: cover;
     }
-    canvas {
+    canvas#overlay {
+      display: block;
+      border-radius: 12px;
       position: absolute;
       top: 0;
       left: 0;
+      width: 480px;
+      height: 360px;
+    }
+    .main-layout {
+      display: flex;
+      gap: 24px;
+      align-items: flex-start;
+    }
+    .left-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex-shrink: 0;
+      width: 480px;
+    }
+    .right-panel {
+      display: flex;
+      flex-direction: row;
+      gap: 16px;
+      align-items: flex-start;
+      flex-shrink: 0;
+    }
+    .bars-column {
+      display: flex;
+      flex-direction: column;
+      width: 220px;
+      flex-shrink: 0;
+    }
+    .timeline-column {
+      display: flex;
+      flex-direction: column;
+      width: 300px;
+      flex-shrink: 0;
+    }
+    .timeline-header {
+      font-size: 0.85rem;
+      color: #aaa;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+    #timeline-canvas {
+      width: 300px;
+      height: 360px;
+      background: #1a1a1a;
+      border-radius: 10px;
+      border: 1px solid #2a2a2a;
+      display: block;
     }
     #expression-display {
-      margin-top: 24px;
       text-align: center;
+      margin-bottom: 20px;
     }
     #emoji {
-      font-size: 5rem;
+      font-size: 4rem;
       line-height: 1.2;
       transition: all 0.3s ease;
     }
     #expression-label {
-      font-size: 1.8rem;
+      font-size: 1.5rem;
       font-weight: 700;
-      margin-top: 8px;
+      margin-top: 6px;
       text-transform: uppercase;
       letter-spacing: 2px;
     }
     #confidence {
-      font-size: 0.95rem;
+      font-size: 0.9rem;
       color: #888;
       margin-top: 4px;
     }
     #bars {
       display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 24px;
-      max-width: 640px;
+      flex-direction: column;
+      gap: 12px;
       width: 100%;
     }
     .bar-item {
-      flex: 1 1 calc(50% - 8px);
-      min-width: 200px;
+      width: 100%;
     }
     .bar-label {
       font-size: 0.8rem;
@@ -93,24 +145,102 @@
       border-radius: 4px;
       transition: width 0.2s ease;
     }
+    .vitals-panel {
+      margin-top: 12px;
+      display: flex;
+      gap: 8px;
+      width: 480px;
+    }
+    .vital-card {
+      flex: 1;
+      background: #1a1a1a;
+      border-radius: 8px;
+      padding: 10px 8px;
+      text-align: center;
+      border: 1px solid #2a2a2a;
+      min-width: 0;
+    }
+    .vital-icon {
+      font-size: 1.2rem;
+      margin-bottom: 2px;
+    }
+    .vital-value {
+      font-size: 1.6rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .vital-unit {
+      font-size: 0.7rem;
+      color: #888;
+      margin-top: 1px;
+    }
+    .vital-status {
+      font-size: 0.65rem;
+      color: #555;
+      margin-top: 4px;
+    }
+    .vital-value.hr { color: #ff4c6a; }
+    .vital-value.br { color: #4cc9f0; }
+    .vital-value.blink { color: #a78bfa; }
+    canvas.signal-canvas {
+      width: 100%;
+      height: 30px;
+      margin-top: 6px;
+      border-radius: 4px;
+      background: #111;
+    }
   </style>
 </head>
 <body>
   <h1>Facial Expression Detector</h1>
   <div id="status">Loading models...</div>
 
-  <div class="video-container">
-    <video id="video" autoplay muted playsinline width="640" height="480"></video>
-    <canvas id="overlay" width="640" height="480"></canvas>
-  </div>
+  <div class="main-layout">
+    <div class="left-panel">
+      <div class="video-container">
+        <video id="video" autoplay muted playsinline width="480" height="360"></video>
+        <canvas id="overlay" width="480" height="360"></canvas>
+      </div>
+      <div class="vitals-panel" id="vitals-panel" style="display:none;">
+        <div class="vital-card">
+          <div class="vital-icon">&#10084;&#65039;</div>
+          <div class="vital-value hr" id="hr-value">--</div>
+          <div class="vital-unit">BPM</div>
+          <canvas class="signal-canvas" id="hr-canvas" height="40"></canvas>
+          <div class="vital-status" id="hr-status">Calibrating...</div>
+        </div>
+        <div class="vital-card">
+          <div class="vital-icon">&#127787;&#65039;</div>
+          <div class="vital-value br" id="br-value">--</div>
+          <div class="vital-unit">breaths/min</div>
+          <canvas class="signal-canvas" id="br-canvas" height="40"></canvas>
+          <div class="vital-status" id="br-status">Calibrating...</div>
+        </div>
+        <div class="vital-card">
+          <div class="vital-icon">&#128065;</div>
+          <div class="vital-value blink" id="blink-value">--</div>
+          <div class="vital-unit">blinks/min</div>
+          <canvas class="signal-canvas" id="blink-canvas" height="40"></canvas>
+          <div class="vital-status" id="blink-status">Calibrating...</div>
+        </div>
+      </div>
+    </div>
 
-  <div id="expression-display" style="display:none;">
-    <div id="emoji">--</div>
-    <div id="expression-label">--</div>
-    <div id="confidence"></div>
+    <div class="right-panel">
+      <div class="bars-column">
+        <div id="expression-display" style="display:none;">
+          <div id="emoji">--</div>
+          <div id="expression-label">--</div>
+          <div id="confidence"></div>
+        </div>
+        <div id="bars"></div>
+      </div>
+      <div class="timeline-column">
+        <div class="timeline-header">Expression Timeline</div>
+        <canvas id="timeline-canvas"></canvas>
+      </div>
+    </div>
   </div>
-
-  <div id="bars"></div>
 
   <script>
     const EMOJI_MAP = {
@@ -120,7 +250,8 @@
       angry: '😠',
       fearful: '😨',
       disgusted: '🤢',
-      surprised: '😲'
+      surprised: '😲',
+      confident: '😎'
     };
 
     const COLORS = {
@@ -130,13 +261,311 @@
       angry: '#f44336',
       fearful: '#9c27b0',
       disgusted: '#ff9800',
-      surprised: '#00bcd4'
+      surprised: '#00bcd4',
+      confident: '#ffd700'
     };
+
+    function computeConfident(expressions) {
+      const positive = (expressions.happy || 0) * 0.4 + (expressions.neutral || 0) * 0.3;
+      const negative = (expressions.fearful || 0) + (expressions.sad || 0) + (expressions.surprised || 0) * 0.5;
+      return Math.min(1, Math.max(0, positive + (1 - negative) * 0.3));
+    }
 
     const video = document.getElementById('video');
     const canvas = document.getElementById('overlay');
     const ctx = canvas.getContext('2d');
     const statusEl = document.getElementById('status');
+
+    // --- Vitals tracking ---
+    const SIGNAL_BUFFER_SIZE = 300; // ~10 seconds at 30fps
+    const rppgSignal = [];          // green channel averages from forehead
+    const breathSignal = [];        // nose tip Y positions
+    const earSignal = [];           // eye aspect ratio signal
+    const signalTimestamps = [];
+    let samplingCanvas = null;
+    let samplingCtx = null;
+    let currentHR = null;
+    let currentBR = null;
+
+    // --- Blink detection ---
+    const EAR_THRESHOLD = 0.22;
+    const blinkTimestamps = [];     // timestamps of detected blinks
+    let eyeClosed = false;
+    let currentBlinkRate = null;
+
+    // --- Expression timeline ---
+    const TIMELINE_MAX = 600;       // ~20 seconds of history at 30fps
+    const expressionHistory = {};   // keyed by expression name, arrays of values
+    for (const expr of Object.keys(EMOJI_MAP)) {
+      expressionHistory[expr] = [];
+    }
+
+    function recordExpressionHistory(expressions) {
+      for (const expr of Object.keys(EMOJI_MAP)) {
+        expressionHistory[expr].push(expressions[expr] || 0);
+        if (expressionHistory[expr].length > TIMELINE_MAX) {
+          expressionHistory[expr].shift();
+        }
+      }
+    }
+
+    function drawTimeline() {
+      const c = document.getElementById('timeline-canvas');
+      const dpr = window.devicePixelRatio || 1;
+      const w = c.offsetWidth * dpr;
+      const h = c.offsetHeight * dpr;
+      c.width = w;
+      c.height = h;
+      const tCtx = c.getContext('2d');
+      tCtx.clearRect(0, 0, w, h);
+
+      const pad = { top: 10 * dpr, right: 14 * dpr, bottom: 30 * dpr, left: 14 * dpr };
+      const plotW = w - pad.left - pad.right;
+      const plotH = h - pad.top - pad.bottom;
+
+      // Grid lines
+      tCtx.strokeStyle = '#2a2a2a';
+      tCtx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.top + (plotH / 4) * i;
+        tCtx.beginPath();
+        tCtx.moveTo(pad.left, y);
+        tCtx.lineTo(pad.left + plotW, y);
+        tCtx.stroke();
+      }
+
+      // Y-axis labels
+      tCtx.fillStyle = '#555';
+      tCtx.font = `${10 * dpr}px -apple-system, sans-serif`;
+      tCtx.textAlign = 'right';
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.top + (plotH / 4) * i;
+        tCtx.fillText((100 - i * 25) + '%', pad.left - 4 * dpr, y + 3 * dpr);
+      }
+
+      // Determine how many data points we have
+      const len = expressionHistory.neutral.length;
+      if (len < 2) return;
+
+      // Draw each expression line
+      for (const expr of Object.keys(EMOJI_MAP)) {
+        const data = expressionHistory[expr];
+        tCtx.strokeStyle = COLORS[expr];
+        tCtx.lineWidth = 1.5 * dpr;
+        tCtx.globalAlpha = 0.85;
+        tCtx.beginPath();
+        for (let i = 0; i < data.length; i++) {
+          const x = pad.left + (i / (TIMELINE_MAX - 1)) * plotW;
+          const y = pad.top + plotH - data[i] * plotH;
+          if (i === 0) tCtx.moveTo(x, y);
+          else tCtx.lineTo(x, y);
+        }
+        tCtx.stroke();
+      }
+      tCtx.globalAlpha = 1;
+
+      // Legend at bottom
+      const legendY = h - 10 * dpr;
+      const exprs = Object.keys(EMOJI_MAP);
+      const legendW = plotW / exprs.length;
+      tCtx.font = `${9 * dpr}px -apple-system, sans-serif`;
+      tCtx.textAlign = 'center';
+      for (let i = 0; i < exprs.length; i++) {
+        const x = pad.left + legendW * i + legendW / 2;
+        tCtx.fillStyle = COLORS[exprs[i]];
+        tCtx.fillRect(x - 12 * dpr, legendY - 5 * dpr, 8 * dpr, 3 * dpr);
+        tCtx.fillText(exprs[i].slice(0, 4), x + 4 * dpr, legendY);
+      }
+    }
+
+    function initSamplingCanvas() {
+      samplingCanvas = document.createElement('canvas');
+      samplingCtx = samplingCanvas.getContext('2d', { willReadFrequently: true });
+    }
+
+    function sampleForehead(box) {
+      // Sample the forehead region (top 30% of face box, middle 60% width)
+      const roiX = Math.floor(box.x + box.width * 0.2);
+      const roiY = Math.floor(box.y);
+      const roiW = Math.floor(box.width * 0.6);
+      const roiH = Math.floor(box.height * 0.3);
+      if (roiW <= 0 || roiH <= 0) return null;
+
+      samplingCanvas.width = roiW;
+      samplingCanvas.height = roiH;
+      samplingCtx.drawImage(video, roiX, roiY, roiW, roiH, 0, 0, roiW, roiH);
+      const pixels = samplingCtx.getImageData(0, 0, roiW, roiH).data;
+
+      let gSum = 0;
+      const count = roiW * roiH;
+      for (let i = 0; i < pixels.length; i += 4) {
+        gSum += pixels[i + 1]; // green channel
+      }
+      return gSum / count;
+    }
+
+    function dist(a, b) {
+      return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+    }
+
+    function computeEAR(landmarks) {
+      const p = landmarks.positions;
+      // Left eye: landmarks 36-41
+      const leftEAR = (dist(p[37], p[41]) + dist(p[38], p[40])) / (2 * dist(p[36], p[39]));
+      // Right eye: landmarks 42-47
+      const rightEAR = (dist(p[43], p[47]) + dist(p[44], p[46])) / (2 * dist(p[42], p[45]));
+      return (leftEAR + rightEAR) / 2;
+    }
+
+    function recordVitalSample(box, landmarks) {
+      const now = performance.now();
+      signalTimestamps.push(now);
+
+      // rPPG: forehead green channel
+      const greenAvg = sampleForehead(box);
+      rppgSignal.push(greenAvg || 0);
+
+      // Breathing: nose tip Y (landmark index 30)
+      const noseTip = landmarks.positions[30];
+      breathSignal.push(noseTip ? noseTip.y : 0);
+
+      // Blink detection via EAR
+      const ear = computeEAR(landmarks);
+      earSignal.push(ear);
+      if (ear < EAR_THRESHOLD && !eyeClosed) {
+        eyeClosed = true;
+        blinkTimestamps.push(now);
+        // Trim old blinks (keep last 60 seconds)
+        while (blinkTimestamps.length > 0 && now - blinkTimestamps[0] > 60000) {
+          blinkTimestamps.shift();
+        }
+      } else if (ear >= EAR_THRESHOLD) {
+        eyeClosed = false;
+      }
+
+      // Trim buffers
+      while (rppgSignal.length > SIGNAL_BUFFER_SIZE) {
+        rppgSignal.shift();
+        breathSignal.shift();
+        earSignal.shift();
+        signalTimestamps.shift();
+      }
+    }
+
+    function bandpassFilter(signal, fps, lowHz, highHz) {
+      // Simple moving-average based bandpass: subtract two different smoothings
+      const lowPeriod = Math.max(2, Math.round(fps / lowHz));
+      const highPeriod = Math.max(1, Math.round(fps / highHz));
+
+      // Smooth for low-pass
+      function smooth(arr, period) {
+        const out = [];
+        for (let i = 0; i < arr.length; i++) {
+          let sum = 0, count = 0;
+          for (let j = Math.max(0, i - period); j <= i; j++) {
+            sum += arr[j]; count++;
+          }
+          out.push(sum / count);
+        }
+        return out;
+      }
+
+      const lowPassed = smooth(signal, highPeriod);  // keeps frequencies below highHz
+      const veryLow = smooth(signal, lowPeriod);      // keeps frequencies below lowHz
+      return lowPassed.map((v, i) => v - veryLow[i]); // bandpass between lowHz and highHz
+    }
+
+    function countPeaks(signal) {
+      let peaks = 0;
+      for (let i = 1; i < signal.length - 1; i++) {
+        if (signal[i] > signal[i - 1] && signal[i] > signal[i + 1] && signal[i] > 0) {
+          peaks++;
+        }
+      }
+      return peaks;
+    }
+
+    function estimateRate(signal, timestamps, lowBPM, highBPM) {
+      if (signal.length < 60) return null; // need ~2 seconds minimum
+
+      const duration = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000;
+      const fps = signal.length / duration;
+      const lowHz = lowBPM / 60;
+      const highHz = highBPM / 60;
+
+      const filtered = bandpassFilter(signal, fps, lowHz, highHz);
+      const peaks = countPeaks(filtered);
+      const rate = (peaks / duration) * 60;
+
+      return (rate >= lowBPM && rate <= highBPM) ? Math.round(rate) : null;
+    }
+
+    function updateVitals() {
+      if (signalTimestamps.length < 90) {
+        // Still calibrating
+        const pct = Math.round((signalTimestamps.length / 90) * 100);
+        document.getElementById('hr-status').textContent = `Calibrating... ${pct}%`;
+        document.getElementById('br-status').textContent = `Calibrating... ${pct}%`;
+        document.getElementById('blink-status').textContent = `Calibrating... ${pct}%`;
+        return;
+      }
+
+      const hr = estimateRate(rppgSignal, signalTimestamps, 45, 160);
+      if (hr !== null) {
+        currentHR = currentHR ? Math.round(currentHR * 0.7 + hr * 0.3) : hr;
+        document.getElementById('hr-value').textContent = currentHR;
+        document.getElementById('hr-status').textContent = 'Estimated via rPPG';
+      }
+
+      const br = estimateRate(breathSignal, signalTimestamps, 6, 35);
+      if (br !== null) {
+        currentBR = currentBR ? Math.round(currentBR * 0.7 + br * 0.3) : br;
+        document.getElementById('br-value').textContent = currentBR;
+        document.getElementById('br-status').textContent = 'Estimated via motion';
+      }
+
+      // Blink rate: blinks in the last 60 seconds, scaled to per-minute
+      const now = performance.now();
+      const recentBlinks = blinkTimestamps.filter(t => now - t < 60000);
+      const elapsed = Math.min(60, (now - signalTimestamps[0]) / 1000);
+      if (elapsed > 5) {
+        const rate = Math.round((recentBlinks.length / elapsed) * 60);
+        currentBlinkRate = currentBlinkRate ? Math.round(currentBlinkRate * 0.7 + rate * 0.3) : rate;
+        document.getElementById('blink-value').textContent = currentBlinkRate;
+        document.getElementById('blink-status').textContent = `${recentBlinks.length} blinks tracked`;
+      }
+
+      drawSignalCanvas('hr-canvas', rppgSignal, '#ff4c6a');
+      drawSignalCanvas('br-canvas', breathSignal, '#4cc9f0');
+      drawSignalCanvas('blink-canvas', earSignal, '#a78bfa');
+    }
+
+    function drawSignalCanvas(canvasId, signal, color) {
+      const c = document.getElementById(canvasId);
+      const cCtx = c.getContext('2d');
+      const w = c.width = c.offsetWidth * 2;
+      const h = c.height = 80;
+      cCtx.clearRect(0, 0, w, h);
+
+      if (signal.length < 2) return;
+
+      // Normalize signal for display
+      const recent = signal.slice(-200);
+      let min = Infinity, max = -Infinity;
+      for (const v of recent) { if (v < min) min = v; if (v > max) max = v; }
+      const range = max - min || 1;
+
+      cCtx.strokeStyle = color;
+      cCtx.lineWidth = 1.5;
+      cCtx.beginPath();
+      for (let i = 0; i < recent.length; i++) {
+        const x = (i / (recent.length - 1)) * w;
+        const y = h - ((recent[i] - min) / range) * (h - 4) - 2;
+        if (i === 0) cCtx.moveTo(x, y);
+        else cCtx.lineTo(x, y);
+      }
+      cCtx.stroke();
+    }
 
     const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.14/model/';
 
@@ -149,7 +578,7 @@
 
         statusEl.textContent = 'Starting camera...';
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, facingMode: 'user' }
+          video: { width: 480, height: 360, facingMode: 'user' }
         });
         video.srcObject = stream;
         await video.play();
@@ -159,6 +588,8 @@
 
         statusEl.textContent = 'Detecting...';
         document.getElementById('expression-display').style.display = 'block';
+        document.getElementById('vitals-panel').style.display = 'flex';
+        initSamplingCanvas();
         buildBars();
         detect();
       } catch (err) {
@@ -206,6 +637,10 @@
           ctx.fill();
         }
 
+        // Record vitals sample
+        recordVitalSample(result.detection.box, result.landmarks);
+        updateVitals();
+
         // Find dominant expression
         const expressions = result.expressions;
         let maxExpr = 'neutral';
@@ -219,12 +654,19 @@
         document.getElementById('expression-label').style.color = COLORS[maxExpr];
         document.getElementById('confidence').textContent = (maxVal * 100).toFixed(1) + '% confidence';
 
+        // Add computed confident score
+        expressions.confident = computeConfident(expressions);
+
         // Update bars
         for (const expr of Object.keys(EMOJI_MAP)) {
           const val = expressions[expr] || 0;
           document.getElementById('bar-' + expr).style.width = (val * 100) + '%';
           document.getElementById('pct-' + expr).textContent = (val * 100).toFixed(0) + '%';
         }
+
+        // Update timeline
+        recordExpressionHistory(expressions);
+        drawTimeline();
 
         statusEl.textContent = 'Detecting...';
       } else {
