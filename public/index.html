@@ -186,6 +186,39 @@
     .vital-value.hr { color: #ff4c6a; }
     .vital-value.br { color: #4cc9f0; }
     .vital-value.blink { color: #a78bfa; }
+    .metrics-panel {
+      margin-top: 8px;
+      display: flex;
+      gap: 6px;
+      width: 480px;
+      flex-wrap: wrap;
+    }
+    .metric-card {
+      flex: 1 1 calc(20% - 6px);
+      min-width: 85px;
+      background: #1a1a1a;
+      border-radius: 8px;
+      padding: 8px 4px;
+      text-align: center;
+      border: 1px solid #2a2a2a;
+    }
+    .metric-label {
+      font-size: 0.6rem;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 4px;
+    }
+    .metric-value {
+      font-size: 1.3rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-value.jaw { color: #ef4444; }
+    .metric-value.stress { color: #f97316; }
+    .metric-value.engagement { color: #22c55e; }
+    .metric-value.fatigue { color: #eab308; }
+    .metric-value.attention { color: #06b6d4; }
     canvas.signal-canvas {
       width: 100%;
       height: 30px;
@@ -228,6 +261,28 @@
           <div class="vital-status" id="blink-status">Calibrating...</div>
         </div>
       </div>
+      <div class="metrics-panel" id="metrics-panel" style="display:none;">
+        <div class="metric-card">
+          <div class="metric-label">Jaw Clench</div>
+          <div class="metric-value jaw" id="jaw-value">--</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Stress</div>
+          <div class="metric-value stress" id="stress-value">--</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Engagement</div>
+          <div class="metric-value engagement" id="engagement-value">--</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Fatigue</div>
+          <div class="metric-value fatigue" id="fatigue-value">--</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Attention</div>
+          <div class="metric-value attention" id="attention-value">--</div>
+        </div>
+      </div>
     </div>
 
     <div class="right-panel">
@@ -244,6 +299,8 @@
         <canvas id="timeline-canvas" class="timeline-canvas"></canvas>
         <div class="timeline-header" style="margin-top:12px;">Vitals Timeline</div>
         <canvas id="vitals-timeline-canvas" class="timeline-canvas"></canvas>
+        <div class="timeline-header" style="margin-top:12px;">Metrics Timeline</div>
+        <canvas id="metrics-timeline-canvas" class="timeline-canvas"></canvas>
       </div>
     </div>
   </div>
@@ -311,6 +368,202 @@
     const VITALS_LABELS = { hr: 'HR', br: 'Breath', blink: 'Blink' };
     const VITALS_RANGES = { hr: [40, 160], br: [4, 40], blink: [0, 40] };
     const vitalsHistory = { hr: [], br: [], blink: [] };
+
+    // --- Derived metrics ---
+    const METRICS_COLORS = { jaw: '#ef4444', stress: '#f97316', engagement: '#22c55e', fatigue: '#eab308', attention: '#06b6d4' };
+    const METRICS_LABELS = { jaw: 'Jaw', stress: 'Stress', engagement: 'Engage', fatigue: 'Fatigue', attention: 'Attn' };
+    const metricsHistory = { jaw: [], stress: [], engagement: [], fatigue: [], attention: [] };
+
+    // Smoothed metric values
+    const metricEma = { jaw: 0, stress: 0, engagement: 0, fatigue: 0, attention: 0 };
+    const METRIC_ALPHA = 0.1;
+
+    // Attention tracking: rolling variance of nose position
+    const nosePosBuffer = [];
+    const NOSE_BUFFER_SIZE = 90; // ~3 seconds
+
+    // Fatigue: track blink durations
+    let blinkStartTime = null;
+    const blinkDurations = []; // recent blink durations in ms
+    const BLINK_DUR_MAX = 30;
+
+    function computeJawClench(landmarks) {
+      const p = landmarks.positions;
+      if (!p[62] || !p[66] || !p[48] || !p[54]) return 0;
+      // Inner lip vertical gap (62-top inner, 66-bottom inner)
+      const lipGap = dist(p[62], p[66]);
+      // Mouth width (48-54)
+      const mouthW = dist(p[48], p[54]);
+      // Jaw width relative to face width
+      const jawW = dist(p[3], p[13]);
+      const faceW = dist(p[0], p[16]);
+      // Clench: lips pressed (small lipGap/mouthW ratio) + jaw muscles engaged (wider jaw)
+      const lipRatio = lipGap / (mouthW || 1);
+      const jawRatio = jawW / (faceW || 1);
+      // Low lip ratio + high jaw ratio = clenching
+      const clench = (1 - lipRatio * 5) * 0.6 + (jawRatio - 0.55) * 4 * 0.4;
+      return isNaN(clench) ? 0 : Math.max(0, Math.min(1, clench));
+    }
+
+    function computeStressIndex(expressions, hr, blinkRate, jawClench) {
+      // Higher HR, higher blink rate, negative expressions, jaw clenching = more stress
+      const hrFactor = hr ? Math.max(0, Math.min(1, (hr - 65) / 50)) : 0.3;
+      const blinkFactor = blinkRate ? Math.max(0, Math.min(1, (blinkRate - 15) / 25)) : 0;
+      const exprFactor = (expressions.fearful || 0) * 0.4 + (expressions.angry || 0) * 0.3 + (expressions.sad || 0) * 0.2 + (expressions.disgusted || 0) * 0.1;
+      return Math.min(1, hrFactor * 0.3 + blinkFactor * 0.2 + exprFactor * 0.3 + jawClench * 0.2);
+    }
+
+    function computeEngagement(ear, landmarks, faceBox) {
+      const p = landmarks.positions;
+      // Eye openness (higher EAR = more open = more engaged)
+      const eyeOpen = Math.max(0, Math.min(1, (ear - 0.15) / 0.2));
+      // Face centered in frame (closer to center = more engaged)
+      const faceCenterX = faceBox.x + faceBox.width / 2;
+      const faceCenterY = faceBox.y + faceBox.height / 2;
+      const frameCenterX = 240; // half of 480
+      const frameCenterY = 180; // half of 360
+      const offX = Math.abs(faceCenterX - frameCenterX) / frameCenterX;
+      const offY = Math.abs(faceCenterY - frameCenterY) / frameCenterY;
+      const centered = Math.max(0, 1 - (offX + offY));
+      // Face size relative to frame (bigger = closer = more engaged)
+      const faceSizeFactor = Math.min(1, (faceBox.width * faceBox.height) / (480 * 360) * 8);
+      return Math.min(1, eyeOpen * 0.4 + centered * 0.3 + faceSizeFactor * 0.3);
+    }
+
+    function computeFatigue(ear, blinkRate) {
+      // Low EAR (droopy eyes), high blink rate, slow blinks = fatigued
+      const droopy = Math.max(0, Math.min(1, (0.28 - ear) / 0.1));
+      const blinkFactor = blinkRate ? Math.max(0, Math.min(1, (blinkRate - 18) / 20)) : 0;
+      // Average blink duration (longer = more fatigued)
+      let durFactor = 0;
+      if (blinkDurations.length > 2) {
+        const avgDur = blinkDurations.reduce((a, b) => a + b, 0) / blinkDurations.length;
+        durFactor = Math.max(0, Math.min(1, (avgDur - 150) / 300));
+      }
+      return Math.min(1, droopy * 0.4 + blinkFactor * 0.25 + durFactor * 0.35);
+    }
+
+    function computeAttention(landmarks) {
+      const noseTip = landmarks.positions[30];
+      nosePosBuffer.push({ x: noseTip.x, y: noseTip.y });
+      if (nosePosBuffer.length > NOSE_BUFFER_SIZE) nosePosBuffer.shift();
+      if (nosePosBuffer.length < 10) return 0.5;
+      // Compute variance of nose position
+      let sumX = 0, sumY = 0;
+      for (const p of nosePosBuffer) { sumX += p.x; sumY += p.y; }
+      const meanX = sumX / nosePosBuffer.length;
+      const meanY = sumY / nosePosBuffer.length;
+      let varSum = 0;
+      for (const p of nosePosBuffer) {
+        varSum += (p.x - meanX) ** 2 + (p.y - meanY) ** 2;
+      }
+      const variance = varSum / nosePosBuffer.length;
+      // Low variance = high attention (steady gaze)
+      return Math.max(0, Math.min(1, 1 - variance / 200));
+    }
+
+    function updateBlinkDuration(ear) {
+      const now = performance.now();
+      if (ear < EAR_THRESHOLD) {
+        if (!blinkStartTime) blinkStartTime = now;
+      } else {
+        if (blinkStartTime) {
+          const dur = now - blinkStartTime;
+          if (dur > 50 && dur < 2000) {
+            blinkDurations.push(dur);
+            if (blinkDurations.length > BLINK_DUR_MAX) blinkDurations.shift();
+          }
+          blinkStartTime = null;
+        }
+      }
+    }
+
+    function updateMetrics(landmarks, expressions, faceBox, ear) {
+      let jaw, stress, engagement, fatigue, attention;
+      try {
+        jaw = computeJawClench(landmarks);
+        stress = computeStressIndex(expressions, currentHR, currentBlinkRate, jaw);
+        engagement = computeEngagement(ear, landmarks, faceBox);
+        fatigue = computeFatigue(ear, currentBlinkRate);
+        attention = computeAttention(landmarks);
+        updateBlinkDuration(ear);
+      } catch (e) {
+        console.error('Metrics error:', e);
+        return;
+      }
+
+      // EMA smooth all metrics
+      const raw = { jaw, stress, engagement, fatigue, attention };
+      for (const k of Object.keys(metricEma)) {
+        metricEma[k] = METRIC_ALPHA * raw[k] + (1 - METRIC_ALPHA) * metricEma[k];
+        // Update display
+        const pct = Math.round(metricEma[k] * 100);
+        document.getElementById(k + '-value').textContent = pct + '%';
+        // Record history
+        metricsHistory[k].push(metricEma[k]);
+        if (metricsHistory[k].length > TIMELINE_MAX) metricsHistory[k].shift();
+      }
+
+      drawMetricsTimeline();
+    }
+
+    function drawMetricsTimeline() {
+      const c = document.getElementById('metrics-timeline-canvas');
+      const dpr = window.devicePixelRatio || 1;
+      const w = c.offsetWidth * dpr;
+      const h = c.offsetHeight * dpr;
+      c.width = w;
+      c.height = h;
+      const mCtx = c.getContext('2d');
+      mCtx.clearRect(0, 0, w, h);
+
+      const pad = { top: 10 * dpr, right: 14 * dpr, bottom: 30 * dpr, left: 14 * dpr };
+      const plotW = w - pad.left - pad.right;
+      const plotH = h - pad.top - pad.bottom;
+
+      // Grid lines
+      mCtx.strokeStyle = '#2a2a2a';
+      mCtx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.top + (plotH / 4) * i;
+        mCtx.beginPath();
+        mCtx.moveTo(pad.left, y);
+        mCtx.lineTo(pad.left + plotW, y);
+        mCtx.stroke();
+      }
+
+      const len = metricsHistory.jaw.length;
+      if (len < 2) return;
+
+      for (const key of Object.keys(METRICS_COLORS)) {
+        const data = metricsHistory[key];
+        mCtx.strokeStyle = METRICS_COLORS[key];
+        mCtx.lineWidth = 1.5 * dpr;
+        mCtx.globalAlpha = 0.85;
+        mCtx.beginPath();
+        for (let i = 0; i < data.length; i++) {
+          const x = pad.left + (i / (TIMELINE_MAX - 1)) * plotW;
+          const y = pad.top + plotH - data[i] * plotH;
+          if (i === 0) mCtx.moveTo(x, y);
+          else mCtx.lineTo(x, y);
+        }
+        mCtx.stroke();
+      }
+      mCtx.globalAlpha = 1;
+
+      // Legend
+      const legendY = h - 10 * dpr;
+      const keys = Object.keys(METRICS_COLORS);
+      const legendW = plotW / keys.length;
+      mCtx.font = `${9 * dpr}px -apple-system, sans-serif`;
+      mCtx.textAlign = 'center';
+      for (let i = 0; i < keys.length; i++) {
+        const x = pad.left + legendW * i + legendW / 2;
+        mCtx.fillStyle = METRICS_COLORS[keys[i]];
+        mCtx.fillRect(x - 12 * dpr, legendY - 5 * dpr, 8 * dpr, 3 * dpr);
+        mCtx.fillText(METRICS_LABELS[keys[i]], x + 8 * dpr, legendY);
+      }
+    }
 
     const EMA_ALPHA = 0.15; // lower = smoother, higher = more responsive
     const emaState = {};
@@ -684,6 +937,7 @@
         statusEl.textContent = 'Detecting...';
         document.getElementById('expression-display').style.display = 'block';
         document.getElementById('vitals-panel').style.display = 'flex';
+        document.getElementById('metrics-panel').style.display = 'flex';
         initSamplingCanvas();
         buildBars();
         detect();
@@ -735,6 +989,10 @@
         // Record vitals sample
         recordVitalSample(result.detection.box, result.landmarks);
         updateVitals();
+
+        // Compute derived metrics
+        const ear = computeEAR(result.landmarks);
+        updateMetrics(result.landmarks, result.expressions, result.detection.box, ear);
 
         // Find dominant expression
         const expressions = result.expressions;
