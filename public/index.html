@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Facial Expression Detector</title>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f0f0f;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    h1 {
+      font-size: 1.6rem;
+      margin-bottom: 16px;
+      font-weight: 600;
+    }
+    #status {
+      margin-bottom: 16px;
+      font-size: 0.95rem;
+      color: #aaa;
+    }
+    .video-container {
+      position: relative;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+    video, canvas {
+      display: block;
+      border-radius: 12px;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    #expression-display {
+      margin-top: 24px;
+      text-align: center;
+    }
+    #emoji {
+      font-size: 5rem;
+      line-height: 1.2;
+      transition: all 0.3s ease;
+    }
+    #expression-label {
+      font-size: 1.8rem;
+      font-weight: 700;
+      margin-top: 8px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+    #confidence {
+      font-size: 0.95rem;
+      color: #888;
+      margin-top: 4px;
+    }
+    #bars {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 24px;
+      max-width: 640px;
+      width: 100%;
+    }
+    .bar-item {
+      flex: 1 1 calc(50% - 8px);
+      min-width: 200px;
+    }
+    .bar-label {
+      font-size: 0.8rem;
+      color: #aaa;
+      margin-bottom: 3px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .bar-track {
+      height: 8px;
+      background: #222;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.2s ease;
+    }
+  </style>
+</head>
+<body>
+  <h1>Facial Expression Detector</h1>
+  <div id="status">Loading models...</div>
+
+  <div class="video-container">
+    <video id="video" autoplay muted playsinline width="640" height="480"></video>
+    <canvas id="overlay" width="640" height="480"></canvas>
+  </div>
+
+  <div id="expression-display" style="display:none;">
+    <div id="emoji">--</div>
+    <div id="expression-label">--</div>
+    <div id="confidence"></div>
+  </div>
+
+  <div id="bars"></div>
+
+  <script>
+    const EMOJI_MAP = {
+      neutral: '😐',
+      happy: '😄',
+      sad: '😢',
+      angry: '😠',
+      fearful: '😨',
+      disgusted: '🤢',
+      surprised: '😲'
+    };
+
+    const COLORS = {
+      neutral: '#9e9e9e',
+      happy: '#4caf50',
+      sad: '#2196f3',
+      angry: '#f44336',
+      fearful: '#9c27b0',
+      disgusted: '#ff9800',
+      surprised: '#00bcd4'
+    };
+
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('overlay');
+    const ctx = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+
+    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.14/model/';
+
+    async function init() {
+      try {
+        statusEl.textContent = 'Loading face detection models...';
+        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+        await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+        await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+
+        statusEl.textContent = 'Starting camera...';
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480, facingMode: 'user' }
+        });
+        video.srcObject = stream;
+        await video.play();
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        statusEl.textContent = 'Detecting...';
+        document.getElementById('expression-display').style.display = 'block';
+        buildBars();
+        detect();
+      } catch (err) {
+        statusEl.textContent = 'Error: ' + err.message;
+        console.error(err);
+      }
+    }
+
+    function buildBars() {
+      const container = document.getElementById('bars');
+      for (const expr of Object.keys(EMOJI_MAP)) {
+        container.innerHTML += `
+          <div class="bar-item">
+            <div class="bar-label">
+              <span>${EMOJI_MAP[expr]} ${expr}</span>
+              <span id="pct-${expr}">0%</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill" id="bar-${expr}" style="width:0%;background:${COLORS[expr]}"></div>
+            </div>
+          </div>`;
+      }
+    }
+
+    async function detect() {
+      const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.4 });
+      const result = await faceapi.detectSingleFace(video, options)
+        .withFaceLandmarks()
+        .withFaceExpressions();
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (result) {
+        // Draw face box
+        const { x, y, width, height } = result.detection.box;
+        ctx.strokeStyle = '#00ff88';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, width, height);
+
+        // Draw landmarks
+        ctx.fillStyle = 'rgba(0, 255, 136, 0.5)';
+        for (const pt of result.landmarks.positions) {
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 1.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Find dominant expression
+        const expressions = result.expressions;
+        let maxExpr = 'neutral';
+        let maxVal = 0;
+        for (const [expr, val] of Object.entries(expressions)) {
+          if (val > maxVal) { maxVal = val; maxExpr = expr; }
+        }
+
+        document.getElementById('emoji').textContent = EMOJI_MAP[maxExpr] || '🤔';
+        document.getElementById('expression-label').textContent = maxExpr;
+        document.getElementById('expression-label').style.color = COLORS[maxExpr];
+        document.getElementById('confidence').textContent = (maxVal * 100).toFixed(1) + '% confidence';
+
+        // Update bars
+        for (const expr of Object.keys(EMOJI_MAP)) {
+          const val = expressions[expr] || 0;
+          document.getElementById('bar-' + expr).style.width = (val * 100) + '%';
+          document.getElementById('pct-' + expr).textContent = (val * 100).toFixed(0) + '%';
+        }
+
+        statusEl.textContent = 'Detecting...';
+      } else {
+        statusEl.textContent = 'No face detected - look at the camera';
+        document.getElementById('emoji').textContent = '🔍';
+        document.getElementById('expression-label').textContent = 'no face';
+        document.getElementById('expression-label').style.color = '#666';
+        document.getElementById('confidence').textContent = '';
+      }
+
+      requestAnimationFrame(detect);
+    }
+
+    init();
+  </script>
+</body>
+</html>
